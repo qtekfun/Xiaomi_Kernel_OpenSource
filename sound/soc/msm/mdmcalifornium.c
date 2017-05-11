@@ -8,6 +8,8 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * !!NOT USED
  */
 
 #include <linux/clk.h>
@@ -26,7 +28,7 @@
 #include <sound/q6afe-v2.h>
 #include <sound/info.h>
 #include <sound/pcm_params.h>
-#include <device_event.h>
+#include <sound/device_event.h>
 #include <soc/qcom/socinfo.h>
 #include <qdsp6v2/msm-pcm-routing-v2.h>
 #include <sound/q6core.h>

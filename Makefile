@@ -1,6 +1,6 @@
 VERSION = 3
 PATCHLEVEL = 18
-SUBLEVEL = 20
+SUBLEVEL = 31
 EXTRAVERSION =
 NAME = Shuffling Zombie Juror
 
@@ -214,7 +214,7 @@ VPATH		:= $(srctree)$(if $(KBUILD_EXTMOD),:$(KBUILD_EXTMOD))
 
 export srctree objtree VPATH
 
-
+CCACHE := $(shell which ccache)
 # SUBARCH tells the usermode build what the underlying arch is.  That is set
 # first, and if a usermode build is happening, the "ARCH=um" on the command
 # line overrides the setting of ARCH below.  If a native build is happening,
@@ -295,10 +295,13 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
 	  else if [ -x /bin/bash ]; then echo /bin/bash; \
 	  else echo sh; fi ; fi)
 
-HOSTCC       = gcc
-HOSTCXX      = g++
-HOSTCFLAGS   = -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -std=gnu89
-HOSTCXXFLAGS = -O2
+# Graphite optimisations
+GRAPHITE	= -fgraphite-identity -floop-parallelize-all -ftree-loop-linear -floop-interchange -floop-strip-mine -floop-block -floop-flatten
+
+HOSTCC       = $(CCACHE) gcc
+HOSTCXX      = $(CCACHE) g++
+HOSTCFLAGS   = $(GRAPHITE) -Wall -Wmissing-prototypes -Wstrict-prototypes -O3 -fomit-frame-pointer -fmodulo-sched -fmodulo-sched-allow-regmoves -fgcse-las -fgraphite -floop-flatten -floop-parallelize-all -ftree-loop-linear -floop-interchange -floop-strip-mine -floop-block -pipe -std=gnu89
+HOSTCXXFLAGS = -O3 -fmodulo-sched -fmodulo-sched-allow-regmoves -fgcse-las -fgraphite -floop-flatten -floop-parallelize-all -ftree-loop-linear -floop-interchange -floop-strip-mine -floop-block -pipe
 
 ifeq ($(shell $(HOSTCC) -v 2>&1 | grep -c "clang version"), 1)
 HOSTCFLAGS  += -Wno-unused-value -Wno-unused-parameter \
@@ -354,7 +357,7 @@ include $(srctree)/scripts/Kbuild.include
 # Make variables (CC, etc...)
 AS		= $(CROSS_COMPILE)as
 LD		= $(CROSS_COMPILE)ld
-REAL_CC		= $(CROSS_COMPILE)gcc
+CC		= $(CCACHE) $(CROSS_COMPILE)gcc -O3
 CPP		= $(CC) -E
 AR		= $(CROSS_COMPILE)ar
 NM		= $(CROSS_COMPILE)nm
@@ -369,19 +372,23 @@ PERL		= perl
 PYTHON		= python
 CHECK		= sparse
 
-# Use the wrapper for the compiler.  This wrapper scans for new
-# warnings and causes the build to stop upon encountering them.
-CC		= $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)
-
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
 CFLAGS_MODULE   =
 AFLAGS_MODULE   =
-LDFLAGS_MODULE  =
+LDFLAGS_MODULE  = --strip-debug
 CFLAGS_KERNEL	=
 AFLAGS_KERNEL	=
 CFLAGS_GCOV	= -fprofile-arcs -ftest-coverage
 
+ARM_ARCH_OPT_MAIN := -mcpu=cortex-a72.cortex-a53+crypto
+GEN_OPT_FLAGS_MAIN := $(call cc-option,$(ARM_ARCH_OPT_MAIN),-march=armv8-a+crypto) \
+ -g0 \
+ -DNDEBUG \
+ -fomit-frame-pointer \
+ -fmodulo-sched \
+ -fmodulo-sched-allow-regmoves \
+ -fivopts
 
 # Use USERINCLUDE when you must reference the UAPI directories only.
 USERINCLUDE    := \
@@ -406,13 +413,22 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common \
 		   -Werror-implicit-function-declaration \
 		   -Wno-format-security \
-		   -std=gnu89
+		   -fno-delete-null-pointer-checks \
+		   -Wno-maybe-uninitialized \
+		   -std=gnu89 \
+		   -fmodulo-sched -fmodulo-sched-allow-regmoves \
+		   $(GEN_OPT_FLAGS_MAIN)
 
-KBUILD_AFLAGS_KERNEL :=
-KBUILD_CFLAGS_KERNEL :=
+# Thanks gcc!
+KBUILD_CFLAGS   += -Wno-unused-variable -Wno-array-bounds -Wno-tautological-compare \
+		   -Wno-bool-compare -Wno-memset-transposed-args -Wno-misleading-indentation \
+		   -Wno-incompatible-pointer-types -Wno-return-local-addr
+
+KBUILD_AFLAGS_KERNEL := $(GEN_OPT_FLAGS_MAIN)
+KBUILD_CFLAGS_KERNEL := $(GEN_OPT_FLAGS_MAIN)
 KBUILD_AFLAGS   := -D__ASSEMBLY__
-KBUILD_AFLAGS_MODULE  := -DMODULE
-KBUILD_CFLAGS_MODULE  := -DMODULE
+KBUILD_AFLAGS_MODULE  := -DMODULE $(GEN_OPT_FLAGS_MAIN)
+KBUILD_CFLAGS_MODULE  := -DMODULE $(GEN_OPT_FLAGS_MAIN)
 KBUILD_LDFLAGS_MODULE := -T $(srctree)/scripts/module-common.lds
 
 # Read KERNELRELEASE from include/config/kernel.release (if it exists)
@@ -614,11 +630,18 @@ all: vmlinux
 include $(srctree)/arch/$(SRCARCH)/Makefile
 
 KBUILD_CFLAGS	+= $(call cc-option,-fno-delete-null-pointer-checks,)
+KBUILD_CFLAGS	+= $(call cc-disable-warning,maybe-uninitialized,)
+KBUILD_CFLAGS	+= $(call cc-disable-warning,array-bounds,)
+KBUILD_CFLAGS	+= $(call cc-disable-warning,unused-const-variable,)
 
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS	+= -Os $(call cc-disable-warning,maybe-uninitialized,)
+KBUILD_CFLAGS += $(call cc-disable-warning,maybe-uninitialized)
+KBUILD_CFLAGS += $(call cc-disable-warning,array-bounds)
 else
-KBUILD_CFLAGS	+= -O2
+KBUILD_CFLAGS	+= -Ofast -Wno-maybe-uninitialized
+KBUILD_CFLAGS += $(call cc-disable-warning,maybe-uninitialized)
+KBUILD_CFLAGS += $(call cc-disable-warning,array-bounds)
 endif
 
 # Tell gcc to never replace conditional load with a non-conditional one
@@ -751,7 +774,7 @@ NOSTDINC_FLAGS += -nostdinc -isystem $(shell $(CC) -print-file-name=include)
 CHECKFLAGS     += $(NOSTDINC_FLAGS)
 
 # warn about C99 declaration after statement
-KBUILD_CFLAGS += $(call cc-option,-Wdeclaration-after-statement,)
+# KBUILD_CFLAGS += $(call cc-option,-Wdeclaration-after-statement,)
 
 # disable pointer signed / unsigned warnings in gcc 4.0
 KBUILD_CFLAGS += $(call cc-disable-warning, pointer-sign)
@@ -781,6 +804,7 @@ endif
 
 include $(srctree)/scripts/Makefile.kasan
 include $(srctree)/scripts/Makefile.extrawarn
+include $(srctree)/scripts/Makefile.ubsan
 
 # Add user supplied CPPFLAGS, AFLAGS and CFLAGS as the last assignments
 KBUILD_CPPFLAGS += $(KCPPFLAGS)
